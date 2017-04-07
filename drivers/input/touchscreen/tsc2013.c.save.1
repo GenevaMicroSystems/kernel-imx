@@ -1,0 +1,1180 @@
+#include <linux/module.h>
+#include <linux/i2c.h>
+#include <linux/slab.h>
+#include <linux/module.h>
+#include <linux/input.h>
+#include <linux/interrupt.h>
+#include <linux/i2c/tsc2013.h>
+#include <linux/gpio.h>
+#include <linux/irq.h>
+#include <linux/of_device.h>
+#include <linux/of.h>
+#include <linux/of_gpio.h>
+#include <linux/delay.h>
+
+#define	MAX_12BIT			                           ((1 << 12) - 1)
+
+#define REG_CFR0_WR                                    ((0x0c << 3) | 0x02)
+#define REG_CFR1_WR                                    ((0x0d << 3) | 0x02)
+#define REG_CFR2_WR                                    ((0x0e << 3) | 0x02)
+#define REG_CFN_WR                                     ((0x0f << 3) | 0x02)
+
+#define REG_X1_RD                                      ((0x00 << 3) | 0x03)
+#define REG_STATUS_RD                                  ((0x08 << 3) | 0x03)
+#define REG_CFR0_RD                                    ((0x0c << 3) | 0x03)
+#define REG_CFR1_RD                                    ((0x0d << 3) | 0x03)
+#define REG_CFR2_RD                                    ((0x0e << 3) | 0x03)
+#define REG_CFN_RD                                     ((0x0f << 3) | 0x03)
+
+#define CFR0_PSM_0                                     (0 << 15)
+#define CFR0_PSM_1                                     (1 << 15)
+
+#define CFR0_STS_0                                     (0 << 14)
+#define CFR0_STS_1                                     (1 << 14)
+
+#define CFR0_RESOLUTION_10_BIT                         (0 << 13)
+#define CFR0_RESOLUTION_12_BIT                         (1 << 13)
+
+#define CFR0_CONVERSION_CLOCK_4MHz                     (0 << 11)
+#define CFR0_CONVERSION_CLOCK_2MHz                     (1 << 11)
+#define CFR0_CONVERSION_CLOCK_1MHz                     (2 << 11)
+
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_0        (0 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_1        (1 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_2        (2 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_3        (3 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_4        (4 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_5        (5 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_6        (6 << 8)
+#define CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_7        (7 << 8)
+
+#define CFR0_PRECHARGE_TIME_0                          (0 << 5)
+#define CFR0_PRECHARGE_TIME_1                          (1 << 5)
+#define CFR0_PRECHARGE_TIME_2                          (2 << 5)
+#define CFR0_PRECHARGE_TIME_3                          (3 << 5)
+#define CFR0_PRECHARGE_TIME_4                          (4 << 5)
+#define CFR0_PRECHARGE_TIME_5                          (5 << 5)
+#define CFR0_PRECHARGE_TIME_6                          (6 << 5)
+#define CFR0_PRECHARGE_TIME_7                          (7 << 5)
+
+#define CFR0_SENSE_TIME_0                              (0 << 2)
+#define CFR0_SENSE_TIME_1                              (1 << 2)
+#define CFR0_SENSE_TIME_2                              (2 << 2)
+#define CFR0_SENSE_TIME_3                              (3 << 2)
+#define CFR0_SENSE_TIME_4                              (4 << 2)
+#define CFR0_SENSE_TIME_5                              (5 << 2)
+#define CFR0_SENSE_TIME_6                              (6 << 2)
+#define CFR0_SENSE_TIME_7                              (7 << 2)
+
+#define CFR0_DTW_ENABLED                               (1 << 1)
+#define CFR0_DTW_DISABLED                              (0 << 1)
+
+#define CFR0_LSM_ENABLED                               1
+#define CFR0_LSM_DISABLED                              0
+
+#define CFR1_BTD_0                                     0
+#define CFR1_BTD_1                                     1
+#define CFR1_BTD_2                                     2
+#define CFR1_BTD_3                                     3
+#define CFR1_BTD_4                                     4
+#define CFR1_BTD_5                                     5
+#define CFR1_BTD_6                                     6
+#define CFR1_BTD_7                                     7
+
+#define CFR2_PINTS_0                                   (0 << 14)
+#define CFR2_PINTS_1                                   (1 << 14)
+#define CFR2_PINTS_2                                   (2 << 14)
+#define CFR2_PINTS_3                                   (3 << 14)
+
+#define CFR2_M_0                                       (0 << 12)
+#define CFR2_M_1                                       (1 << 12)
+#define CFR2_M_2                                       (2 << 12)
+#define CFR2_M_3                                       (3 << 12)
+
+#define CFR2_W_0                                       (0 << 10)
+#define CFR2_W_1                                       (1 << 10)
+#define CFR2_W_2                                       (2 << 10)
+#define CFR2_W_3                                       (3 << 10)
+
+#define CFR2_MAVE_X_ENABLED                            (1 << 4)
+#define CFR2_MAVE_X_DISABLED                           (0 << 4)
+
+#define CFR2_MAVE_Y_ENABLED                            (1 << 3)
+#define CFR2_MAVE_Y_DISABLED                           (0 << 3)
+
+#define CFR2_MAVE_Z_ENABLED                            (1 << 2)
+#define CFR2_MAVE_Z_DISABLED                           (0 << 2)
+
+#define CFR2_MAVE_AUX_ENABLED                          (1 << 1)
+#define CFR2_MAVE_AUX_DISABLED                         (0 << 1)
+
+#define TSC2013_STATUS_DAVX                            (1 << 15)
+#define TSC2013_STATUS_DAVY                            (1 << 14)
+#define TSC2013_STATUS_DAVZ1                           (1 << 13)
+#define TSC2013_STATUS_DAVZ2                           (1 << 12)
+
+#define MAX_FINGER_NUM                                 2
+#define TIME_DELAY                                     (50 * HZ / 1000)
+
+//#define TSC2013_IRQ_PIN                                S5PV210_GPH1(6)
+//#define TSC2013_IRQ_PIN                                6
+#define ST_SETTLING_COUNT                              1
+
+#define XMAX                                           MAX_12BIT
+#define YMAX                                           MAX_12BIT
+#define ZMAX                                           MAX_12BIT
+#define MAX_FINGER                                     2
+
+#define MAV_NUM                                        (12)
+
+struct ts_event {
+	u16	x;
+	u16	y;
+	u16	z1, z2;
+};
+
+typedef union
+{
+  u8 buffer[16];
+  struct
+  {
+    u16 X1;
+    u16 X2;
+    u16 Y1;
+    u16 Y2;
+    u16 IX;
+    u16 IY;
+    u16 Z1;
+    u16 Z2;
+    u16 AUX;
+  }values;
+}tsc2013_data_set;
+
+struct tsc2013
+{
+	struct input_dev *input;
+	char phys[32];
+
+	struct delayed_work	work;
+
+	struct i2c_client *client;
+
+//	u16	model;
+	u16	x_plate_ohms;
+	u16	max_rt;
+
+	unsigned long poll_delay;
+//	unsigned long poll_period;
+
+	bool pendown;
+	int	irq;
+
+	unsigned int tsc2013_touch_status;
+	tsc2013_data_set data_set;
+
+	unsigned int finger_pos_x[MAX_FINGER_NUM];
+	unsigned int finger_pos_y[MAX_FINGER_NUM];
+
+	unsigned int prev_finger_pos_x[MAX_FINGER_NUM];
+	unsigned int prev_finger_pos_y[MAX_FINGER_NUM];
+
+	unsigned int MAV_finger_pos_x0_samples[MAV_NUM];
+	unsigned int MAV_finger_pos_x0_num_samples;
+	unsigned int MAV_finger_pos_x0_total;
+
+	unsigned int MAV_finger_pos_y0_samples[MAV_NUM];
+	unsigned int MAV_finger_pos_y0_num_samples;
+	unsigned int MAV_finger_pos_y0_total;
+
+	unsigned int MAV_finger_pos_x1_samples[MAV_NUM];
+	unsigned int MAV_finger_pos_x1_num_samples;
+	unsigned int MAV_finger_pos_x1_total;
+
+	unsigned int MAV_finger_pos_y1_samples[MAV_NUM];
+	unsigned int MAV_finger_pos_y1_num_samples;
+	unsigned int MAV_finger_pos_y1_total;
+
+	int finger_number;
+	int finger_loop_count;
+
+//	int	(*get_pendown_state)(void);
+//	void (*clear_penirq)(void);
+};
+
+typedef union
+{
+   u16 value;
+   struct
+   {
+      u8 low_byte;
+      u8 high_byte;
+   }bytes;
+}tsc2013_register;
+
+/**
+ * calibration array refers to
+ * (delta_x[0], delta_x[1], delta_x[2], delta_y[0], delta_y[1], delta_y[2], delta).
+ * Which generated by calibration service.
+ * In this driver when we got touch pointer (x', y') from PMIC ADC,
+ * we calculate the display pointer (x,y) by:
+ * x = (delta_x[0] * x' + delta_x[1] * y' + delta_x[2]) / delta;
+ * y = (delta_y[0] * x' + delta_y[1] * y' + delta_y[2]) / delta;
+ */
+static int calibration[7];
+module_param_array(calibration, int, NULL, S_IRUGO | S_IWUSR);
+
+static void tsc2013_hw_exit(struct tsc2013 *ts);
+static int tsc2013_hw_init(struct tsc2013 *ts);
+
+static int tsc2013_write_config_values(struct i2c_client *client);
+static int tsc2013_i2c_write_byte(struct i2c_client *client,u8 value);
+static int tsc2013_read_touch_status(struct i2c_client *client);
+static int tsc2013_i2c_read_multi_byte(struct i2c_client *client, unsigned char *data, 
+                                             unsigned char len);
+static int tsc2013_i2c_write_byte(struct i2c_client *client,u8 value);
+static int tsc2013_i2c_write_register(struct i2c_client *client, u8 reg_address, u16 value);
+static int tsc2013_read_touch_status(struct i2c_client *client);
+static int tsc2013_read_touch_data(struct i2c_client *client);
+
+static void tsc2013_reset(void);
+static int tsc2013_sw_init(struct i2c_client *client);
+
+static void touch_timer_fire(unsigned long data);
+
+static struct timer_list touch_timer;
+
+unsigned int MAV(unsigned int *samples, unsigned int *num_samples, unsigned int *total, unsigned int sample)
+{
+	unsigned int *oldest = 0;
+
+	if (*num_samples < MAV_NUM)
+    {
+	    samples[*num_samples] = sample;
+		(*num_samples)++;
+
+	    *total += sample;
+	}
+    else
+    {
+	    oldest = &samples[*num_samples % MAV_NUM];
+		(*num_samples)++;
+
+		*total += sample;
+		*total -= (*oldest);
+
+		(*oldest) = sample;
+    }
+
+    if (*num_samples < MAV_NUM)
+    {
+        return (*total / *num_samples);
+    }
+	else
+	{
+	    return (*total / MAV_NUM);
+	}
+}
+
+static void IIR_filter_do(unsigned int *ptrArrayX)
+{
+    unsigned int k;
+
+    k = ((5 * (*(ptrArrayX + 1)))+(3 * (*ptrArrayX))) >> 3;
+    *(ptrArrayX + 1) = k;
+}
+
+void IIR_filter(unsigned int *PrevVal, unsigned int *CurVal)
+{
+    static unsigned int FilterBuffer[2];
+
+    FilterBuffer[0] = *(PrevVal);
+    FilterBuffer[1] = *(CurVal);
+
+	if((FilterBuffer[0] == 0xFFFF) || (FilterBuffer[1] == 0xFFFF))
+        return;
+
+	IIR_filter_do(FilterBuffer);
+
+	*(CurVal) = FilterBuffer[1];
+}
+
+static void tsc2013_hw_exit(struct tsc2013 *ts)
+{
+	printk(KERN_WARNING "tsc2013_remove-->gpio_free\n");
+
+//	gpio_free(TSC2013_IRQ_PIN);
+}
+
+static int tsc2013_hw_init(struct tsc2013 *ts)
+{
+	int ret = 0;
+
+	printk(KERN_WARNING "-->tsc2013_hw_init\n");
+
+//	ret = gpio_request(TSC2013_IRQ_PIN, "tsc2013_pen_down");
+//	if (ret < 0)
+//	{
+//	    printk(KERN_ERR "got a return value of %d from gpio_request\n", ret);
+//
+//		return ret;
+//	}
+//	printk(KERN_WARNING "after gpio_request\n");
+
+//	ret = gpio_direction_input(TSC2013_IRQ_PIN);
+//	if(ret <0)
+//	{
+//	  printk(KERN_ERR "got a return value of %d from gpio_direction_input\n", ret);
+//
+//	  return ret;
+//	}
+
+//	printk(KERN_WARNING "after gpio_direction_input\n");
+//
+//	ret = gpio_to_irq(TSC2013_IRQ_PIN);
+//	if (ret < 0)
+//	{
+//		printk(KERN_ERR "got a return value of %d from gpio_to_irq\n", ret);
+//
+//		return ret;
+//	}
+//	else
+//	{
+//	   ts->irq = ret;
+//	}
+//
+
+	ret = gpio_request( 101, "tsc2_rst");
+	if (ret < 0)
+	{
+	    printk(KERN_ERR "got a return value of %d from gpio_request\n", ret);
+	    return ret;
+	}
+
+	// Set low
+	ret = gpio_direction_output(101, 0);
+	if(ret <0)
+	{
+	  printk(KERN_ERR "got a return value of %d from gpio_direction_output\n", ret);
+
+	  return;
+	}
+
+	mdelay(1);
+
+	// Set high
+	ret = gpio_direction_output(101, 1);
+	if(ret <0)
+	  printk(KERN_ERR "got a return value of %d from gpio_direction_output\n", ret);
+
+	return ret;
+}
+
+static int tsc2013_i2c_write_byte(struct i2c_client *client,u8 value)
+{
+	int ret = 0;
+	char buffer[1];
+
+    buffer[0] = value;
+	ret = i2c_master_send(client, buffer, 1);
+
+	if (ret < 0)
+	{
+	  dev_err(&client->dev, "tsc2013_i2c_write_byte : I2C write error, i2c_master_send returned %d\n", ret);
+	}
+
+	return ret;
+}
+
+
+static int tsc2013_i2c_read_multi_byte(struct i2c_client *client, unsigned char *data,
+                                             unsigned char len)
+{
+	int ret;
+
+	ret = i2c_master_recv(client, data, len);
+
+	if (unlikely(ret < 0))
+	{
+		dev_err(&client->dev, "tsc2013_i2c_read_multi_byte : I2C read error, i2c_master_recv returned %d\n", ret);
+	}
+
+	return ret;
+}
+
+static int tsc2013_i2c_write_register(struct i2c_client *client, u8 reg_address, u16 value)
+{
+	int ret = 0;
+	char buffer[3];
+
+    buffer[0] = reg_address;
+	buffer[1] = ((value >> 8) & 0xff);
+	buffer[2] = (value & 0xff);
+
+	ret = i2c_master_send(client, buffer, 3);
+
+	if (ret < 0)
+	{
+	  dev_err(&client->dev, "tsc2013_i2c_write_register : I2C write error, i2c_master_send returned %d\n", ret);
+	}
+
+	return ret;
+}
+
+static int tsc2013_read_touch_data(struct i2c_client *client)
+{
+  int i ;
+  int ret = 0;
+  struct tsc2013 *ts = i2c_get_clientdata(client);
+
+  ret = tsc2013_i2c_write_byte(client, REG_X1_RD);
+  if (ret < 0)
+  {
+	 dev_err(&client->dev, "tsc2013_read_touch_status -> tsc2013_i2c_write_byte: I2C write error.\n");
+
+	 return ret;
+  }
+
+  ret = tsc2013_i2c_read_multi_byte(client, (u8 *)ts->data_set.buffer, 16);
+  if (ret < 0)
+  {
+	 dev_err(&client->dev, "tsc2013_read_touch_status -> tsc2013_i2c_read_multi_byte: I2C read error.\n");
+
+	 return ret;
+  }
+
+  for (i = 0; i < 8; i++)
+  {
+     swap(ts->data_set.buffer[i * 2], ts->data_set.buffer[i * 2 + 1]);
+  }
+
+  return 0;
+}
+
+static int tsc2013_read_touch_status(struct i2c_client *client)
+{
+   struct tsc2013 *ts = i2c_get_clientdata(client);
+
+   tsc2013_register reg;
+   int ret = 0;
+
+   ret = tsc2013_i2c_write_byte(client,REG_STATUS_RD);
+   if (ret < 0)
+   {
+	   dev_err(&client->dev, "tsc2013_read_touch_status -> tsc2013_i2c_write_byte: I2C write error.\n");
+
+	   return ret;
+   }
+
+   ret = tsc2013_i2c_read_multi_byte(client,(u8 *)&reg.value, 2);
+   if (ret < 0)
+   {
+	   dev_err(&client->dev, "tsc2013_read_touch_status -> tsc2013_i2c_read_multi_byte: I2C read error.\n");
+
+	   return ret;
+   }
+
+   swap(reg.bytes.high_byte,reg.bytes.low_byte);
+
+   ts->tsc2013_touch_status = reg.value;
+
+   return 0;
+}
+
+static void tsc2013_reset(void)
+{
+}
+
+static int tsc2013_sw_init(struct i2c_client *client)
+{
+	tsc2013_reset();
+
+	tsc2013_write_config_values(client);
+
+	//Control Byte ID :
+	// 		 C3:C0 : 0
+	// 		   RM  : 0	(10 Bit)
+	// 		 SWRST : 0
+	// 		   STS : 0
+	//tsc2013_i2c_write_byte(0x80);   //Scan X,Y,Z
+
+	//Control Byte ID : 1
+	// 		 C3:C0 : 0
+	// 		   RM  : 1	(12 Bit)
+	// 		 SWRST : 0
+	// 		   STS : 0
+	tsc2013_i2c_write_byte(client,0x84);	 //Scan X,Y,Z
+
+    return 0;
+}
+
+static int tsc2013_write_config_values(struct i2c_client *client)
+{
+  //tsc2013_register reg;
+  u16 value;
+
+  value = CFR0_PSM_1 |
+		  CFR0_STS_0 |	 //Normal Operation
+		  CFR0_RESOLUTION_12_BIT |
+//		  CFR0_CONVERSION_CLOCK_4MHz |
+		  CFR0_CONVERSION_CLOCK_2MHz |
+		  //CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_2 |	//500us
+		  CFR0_PANEL_VOLTAGE_STABILIZATION_TIME_5 |   //10ms
+		  CFR0_PRECHARGE_TIME_4 |					  //1.044ms
+		  CFR0_SENSE_TIME_3 |						  //608us
+		  CFR0_DTW_DISABLED |
+		  CFR0_LSM_DISABLED;
+  tsc2013_i2c_write_register(client, REG_CFR0_WR, value);
+  printk(KERN_WARNING "tsc2013_i2c_write_register : CFG[%x] = 0x%x\n",REG_CFR0_WR, value);
+
+  //tsc2013_i2c_write_byte(REG_CFR0_RD);
+  //tsc2013_i2c_read_multi_byte((uint8 *)&reg.value, 2);
+  //swap(&reg.bytes.high_byte,&reg.bytes.low_byte);
+
+  value = CFR1_BTD_0;
+  tsc2013_i2c_write_register(client, REG_CFR1_WR, value);
+  printk(KERN_WARNING "tsc2013_i2c_write_register : CFG[%x] = 0x%x\n",REG_CFR1_WR, value);
+
+  //tsc2013_i2c_write_byte(REG_CFR1_RD);
+  //tsc2013_i2c_read_multi_byte((uint8 *)&reg.value, 2);
+  //swap(&reg.bytes.high_byte,&reg.bytes.low_byte);
+
+  value = CFR2_PINTS_2 |  ///DAV
+		  CFR2_M_3 |	 //M = 15
+		  CFR2_W_2 |	 //W = 7
+		  CFR2_MAVE_X_ENABLED |
+		  CFR2_MAVE_Y_ENABLED |
+		  CFR2_MAVE_Z_ENABLED |
+		  CFR2_MAVE_AUX_DISABLED;
+  tsc2013_i2c_write_register(client, REG_CFR2_WR, value);
+  printk(KERN_WARNING "tsc2013_i2c_write_register : CFG[%x] = 0x%x\n",REG_CFR2_WR, value);
+
+  //tsc2013_i2c_write_byte(REG_CFR2_RD);
+  //tsc2013_i2c_read_multi_byte((uint8 *)&reg.value, 2);
+  //swap(&reg.bytes.high_byte,&reg.bytes.low_byte); 
+
+  return 0;
+}
+
+static void calculate_finger_pos(struct tsc2013 *ts)
+{
+  if (ts->data_set.values.X1 >= ts->data_set.values.X2)
+  {
+    ts->finger_pos_x[0] = ts->data_set.values.X2 + ((ts->data_set.values.X1 - ts->data_set.values.X2) >> 1);
+  }
+  else
+  {
+    ts->finger_pos_x[0] = ts->data_set.values.X1 + ((ts->data_set.values.X2 - ts->data_set.values.X1) >> 1);
+  }
+
+  if (ts->data_set.values.Y1 >= ts->data_set.values.Y2)
+  {
+    ts->finger_pos_y[0] = ts->data_set.values.Y2 + ((ts->data_set.values.Y1 - ts->data_set.values.Y2) >> 1);
+  }
+  else
+  {
+    ts->finger_pos_y[0] = ts->data_set.values.Y1 + ((ts->data_set.values.Y2 - ts->data_set.values.Y1) >> 1);
+  }
+
+  //ts->finger_pos_x[0] = 4096 - ts->finger_pos_x[0];
+  //ts->finger_pos_y[0] = 4096 - ts->finger_pos_y[0];
+}
+
+#define TS_RX			                694	    /* X-plane resister */
+#define TS_RY			                228	    /* Y-plane resister */
+
+#define TS_DUAL_MIN		                9
+
+#define TS_PREC_BITS		            10 	    /* Precision, must >= 2 */
+#define TS_COEF_DEFAULT		            ((u32)(2.000f * (1 << TS_PREC_BITS)))
+#define TS_RTOUCH_NORMAL	            700	    /* Normal touch resister */
+#define TS_V			                4096	/* Max AD (LeftUpper corner) */
+#define TS_V_MAX                        4096
+
+#define BITS_PER_LONG_LONG              64
+
+unsigned long int64_sqrt(unsigned long long x)
+{
+	unsigned long long m = 0, y = 0, b = 0;
+
+	if (x <= 1) return x;
+
+	m = 1ULL << (BITS_PER_LONG_LONG - 2);
+	while (m != 0)
+	{
+		b = y + m;
+		y >>= 1;
+
+		if (x >= b)
+		{
+		   x -= b;
+		   y += m;
+		}
+
+		m >>= 2;
+	}
+
+	return y;
+}
+
+//static void tsc2013_work(struct work_struct *work)
+static void tsc2013_work(struct tsc2013 *ts)
+{
+//	struct tsc2013 *ts = container_of(to_delayed_work(work), struct tsc2013, work);
+	int ret = 0;
+	int i;
+
+	u32 rtouch;
+	int ubc, uad;		    /* |UB-UC|, |UA-UD| */
+    	bool neg_slope;
+	u32 x, y, rx2, ry2;	    /* Intermediate results */
+	u64 a64, b64, c64;	    /* Equation coefficients */
+	u32 tmp;
+
+	ret = tsc2013_read_touch_status(ts->client);
+    	if (ret < 0)
+    	{
+		dev_err(&ts->client->dev, "tsc2013_read_touch_status : I2C error.\n");
+
+		return;
+    	}
+
+	//printk(KERN_WARNING "touch_status = %x\n", ts->tsc2013_touch_status);
+
+	if ((ts->tsc2013_touch_status & 0xf000) == 0xf000)
+	{
+		//printk(KERN_WARNING "DAV\n");
+
+		ret = tsc2013_read_touch_data(ts->client);
+		if (ret < 0)
+        	{
+	       		dev_err(&ts->client->dev, "tsc2013_read_touch_data : I2C error.\n");
+
+		   	return;
+        	}
+
+		ts->finger_number = 1;
+
+		//printk(KERN_WARNING "----------------------------------------------");
+		//printk(KERN_WARNING "(%4d,%4d)<%4d,%4d>{%4d,%4d}[%4d,%4d]\n",
+		//                                     ts->data_set.values.X1,
+        	//                                     ts->data_set.values.X2,
+        	//                                     ts->data_set.values.Y1,
+        	//                                     ts->data_set.values.Y2,
+        	//                                     ts->data_set.values.Z1,
+        	//                                     ts->data_set.values.Z2,
+        	//                                     ts->data_set.values.IX,
+        	//                                     ts->data_set.values.IY);
+
+        	//Rtouch  = Rx-Plate * X1 * (Z2 - Z1) / (4096 * Z1);
+        	rtouch = TS_RX * ts->data_set.values.X1 * (ts->data_set.values.Z2 -  ts->data_set.values.Z1);
+        	rtouch = (rtouch / ts->data_set.values.Z1) >> 12;
+		//printk(KERN_WARNING "rtouch = %d\n", rtouch);
+
+		ubc = ts->data_set.values.X1 - ts->data_set.values.X2;
+		uad = ts->data_set.values.Y1 - ts->data_set.values.Y2;
+		//printk(KERN_WARNING "ubc = %d,uad = %d\n", ubc, uad);
+
+        	neg_slope = (ubc < 0);
+		ubc = abs(ubc);
+
+		/* UA-UD should follow the same sign as UB-UC */
+		if ((uad < 0) != neg_slope)
+		{
+		   //printk(KERN_WARNING "##single touch 1\n");
+		   ts->finger_number = 1;
+		}
+
+		uad = abs(uad);
+		/* Very closed samples mean single touch or vertical/horizontal */
+		if (ubc <= TS_DUAL_MIN || uad <= TS_DUAL_MIN)
+		{
+		   //printk(KERN_WARNING "##single touch 2\n");
+		   ts->finger_number = 1;
+		}
+		else
+		{
+		   //printk(KERN_WARNING "<<dual touch>>\n");
+		   ts->finger_number = 2;
+		}
+
+	        if (ts->finger_number == 1)
+        	{
+        		calculate_finger_pos(ts);
+        	}
+		else
+		{
+			x = TS_COEF_DEFAULT;
+
+			a64 = x;
+			a64 *= TS_V;
+			a64 >>= TS_PREC_BITS;
+			a64 += uad;
+			b64 = uad;
+			b64 *= TS_RY;
+			b64 *= ((1<<(TS_PREC_BITS-1)) + (x>>1));	/* *512 */
+			c64 = 2 * uad;
+			c64 *= TS_RY;
+			c64 *= TS_RTOUCH_NORMAL;	/* Fixed RTouch */
+
+			/* a: normal; b: *512; c: normal */
+			do_div(b64, a64);	/* (b/2a)*1024 */
+			do_div(c64, a64);	/* (c/a) */
+
+			//int_sqrt
+			c64 <<= (2 * TS_PREC_BITS);
+			a64 = int64_sqrt(b64*b64 + c64);
+			a64 += b64;
+			a64 >>= 2;		/* *256 */
+			y = (u32)a64;
+
+			ry2 = y;
+			rx2 = (x * y) >> TS_PREC_BITS;
+
+			/* x1, x2 */
+			x = (ts->data_set.values.X1 + ts->data_set.values.X2) << (TS_PREC_BITS-2);
+			tmp = (TS_V * rx2) / TS_RX;
+
+			if (unlikely(x <= tmp))
+				ts->finger_pos_x[0] = 1;
+			else
+				ts->finger_pos_x[0] = (x - tmp) >> (TS_PREC_BITS-1);
+
+			ts->finger_pos_x[1] = (x + tmp) >> (TS_PREC_BITS-1);
+
+			/* y1, y2 */
+			y = (ts->data_set.values.Y1 + ts->data_set.values.Y2) << (TS_PREC_BITS - 2);
+			tmp = (TS_V * ry2) / TS_RY;
+
+			/* y = y0 * 512, tmp = dy * 512 */
+			if (unlikely(y <= tmp))
+			   ts->finger_pos_y[0] = 1;
+			else
+			   ts->finger_pos_y[0] = (y - tmp) >> (TS_PREC_BITS - 1);
+
+			ts->finger_pos_y[1] = (y + tmp) >> (TS_PREC_BITS - 1);
+
+			//printk(KERN_WARNING "$$(%4d,%4d)[%4d,%4d]\n", 
+			//											  ts->finger_pos_x[0],
+			//											  ts->finger_pos_y[0],
+			//											  ts->finger_pos_x[1],
+			//											  ts->finger_pos_y[1]);
+
+			//printk(KERN_WARNING "----------------------------------------------");
+		}
+
+		if (ts->finger_loop_count < ST_SETTLING_COUNT)
+		{
+		  ts->finger_loop_count++;
+		}
+		else
+		{
+          		if (ts->finger_number == 1)
+          		{
+				int x, y;
+
+printk(KERN_WARNING "touch 1\n");
+
+				if (calibration[6] == 0) {
+					x =  ts->finger_pos_x[0];
+					y =  ts->finger_pos_y[0];
+				} else {
+					x = calibration[0] * (int)ts->finger_pos_x[0] +
+					calibration[1] * (int)ts->finger_pos_y[0] +
+					calibration[2];
+					x /= calibration[6];
+					if (x < 0)
+						x = 0;
+					y = calibration[3] * (int)ts->finger_pos_x[0] +
+				calibration[4] * (int)ts_sample.y_ +
+				calibration[5];
+			y /= calibration[6];
+			if (y < 0)
+				y = 0;
+		}
+
+		if (x != last_x) {
+			input_report_abs(mxc_inputdev, ABS_X, x);
+			last_x = x;
+		}
+		if (y != last_y) {
+			input_report_abs(mxc_inputdev, ABS_Y, y);
+			last_y = y;
+		}
+
+            			input_report_abs(ts->input, ABS_MT_TRACKING_ID, 0);
+				input_report_abs(ts->input, ABS_MT_POSITION_X, ts->finger_pos_x[0]);
+		    		input_report_abs(ts->input, ABS_MT_POSITION_Y, ts->finger_pos_y[0]);
+	        		input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR, 30);
+				input_mt_sync(ts->input);
+				input_report_key(ts->input, BTN_TOUCH, 1);
+				input_sync(ts->input);
+          		}
+		  	else
+		  	{
+/*
+			  IIR_filter(&ts->prev_finger_pos_x[0], &ts->finger_pos_x[0]);
+			  IIR_filter(&ts->prev_finger_pos_y[0], &ts->finger_pos_y[0]);
+
+			  IIR_filter(&ts->prev_finger_pos_x[1], &ts->finger_pos_x[1]);
+			  IIR_filter(&ts->prev_finger_pos_y[1], &ts->finger_pos_y[1]);
+
+                     	  ts->prev_finger_pos_x[0] = ts->finger_pos_x[0];
+			  ts->prev_finger_pos_y[0] = ts->finger_pos_y[0];
+
+			  ts->prev_finger_pos_x[1] = ts->finger_pos_x[1];
+			  ts->prev_finger_pos_y[1] = ts->finger_pos_y[1];
+
+			  ts->finger_pos_x[0] = MAV( ts->MAV_finger_pos_x0_samples,
+			                            &ts->MAV_finger_pos_x0_num_samples,
+			                            &ts->MAV_finger_pos_x0_total,
+			                            ts->finger_pos_x[0]);
+
+			  ts->finger_pos_y[0] = MAV( ts->MAV_finger_pos_y0_samples,
+			                            &ts->MAV_finger_pos_y0_num_samples,
+			                            &ts->MAV_finger_pos_y0_total,
+			                            ts->finger_pos_y[0]);
+
+			  ts->finger_pos_x[1] = MAV( ts->MAV_finger_pos_x1_samples,
+			                            &ts->MAV_finger_pos_x1_num_samples,
+			                            &ts->MAV_finger_pos_x1_total,
+			                            ts->finger_pos_x[1]);
+
+			  ts->finger_pos_y[1] = MAV( ts->MAV_finger_pos_y1_samples,
+			                            &ts->MAV_finger_pos_y1_num_samples,
+			                            &ts->MAV_finger_pos_y1_total,
+			                            ts->finger_pos_y[1]);
+*/
+
+			  	for (i = 0; i < 2; i++)
+			  	{
+printk(KERN_WARNING "touch 2\n");
+			  		input_report_abs(ts->input, ABS_MT_POSITION_X, ts->finger_pos_x[i]);
+			    		input_report_abs(ts->input, ABS_MT_POSITION_Y, ts->finger_pos_y[i]);
+		        		input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR, 30);
+			    		input_report_abs(ts->input, ABS_MT_TRACKING_ID, i);
+			    		input_mt_sync(ts->input);
+			  	}
+
+			  	input_report_key(ts->input, BTN_TOUCH, 1);
+			  	input_sync(ts->input);
+		  	}
+		}
+	}
+
+	//rest timeout timer
+	mod_timer(&touch_timer, jiffies + TIME_DELAY);
+}
+
+static void touch_timer_fire(unsigned long data)
+{
+	//printk(KERN_WARNING "-->touch_timer_fire\n");
+	struct tsc2013 *ts = (struct tsc2013 *)data;
+    //int ret = 0;
+
+	if (ts)
+	{
+	  input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR, 0);
+	  //input_event(ts->input, EV_KEY, BTN_TOUCH, 0);
+	  input_report_key(ts->input, BTN_TOUCH, 0);
+	  input_sync(ts->input);
+
+	  ts->finger_loop_count = 0;
+
+	  //ts->prev_finger_pos_x[0] = 0xFFFF;
+  	  //ts->prev_finger_pos_x[1] = 0xFFFF;
+
+	  //ts->prev_finger_pos_y[0] = 0xFFFF;
+	  //ts->prev_finger_pos_y[1] = 0xFFFF;
+
+	  ts->MAV_finger_pos_x0_num_samples = 0;
+      ts->MAV_finger_pos_x0_total = 0;
+
+      ts->MAV_finger_pos_y0_num_samples = 0;
+      ts->MAV_finger_pos_y0_total = 0;
+
+      ts->MAV_finger_pos_x1_num_samples = 0;
+      ts->MAV_finger_pos_x1_total = 0;
+
+      ts->MAV_finger_pos_y1_num_samples = 0;
+      ts->MAV_finger_pos_y1_total = 0;
+	}
+
+	//printk(KERN_WARNING "off\n");
+}
+
+static irqreturn_t tsc2013_irq(int irq, void *handle)
+{
+	struct tsc2013 *ts = handle;
+
+	//printk(KERN_WARNING "-->tsc2013_irq\n");
+
+//	schedule_delayed_work(&ts->work, msecs_to_jiffies(ts->poll_delay));
+	tsc2013_work(ts);
+
+//	if (ts->clear_penirq)
+//		ts->clear_penirq();
+
+	return IRQ_HANDLED;
+}
+
+static void tsc2013_free_irq(struct tsc2013 *ts)
+{
+	printk(KERN_WARNING "-->tsc2013_free_irq\n");
+
+	free_irq(ts->irq, ts);
+}
+
+#ifdef CONFIG_OF
+static int tsc2013_probe_dt(struct i2c_client *client, struct tsc2013 *ts)
+{
+	struct device_node *np = client->dev.of_node;
+        u32 val32;
+
+	printk(KERN_WARNING "-->tsc2013_probe_dt\n");
+
+        if (!np) {
+                dev_err(&client->dev, "missing device tree data\n");
+                return -EINVAL;
+        }
+
+//	ts->model             = pdata->model;
+
+    	if (!of_property_read_u32(np, "ti,poll_delay", &val32))
+                ts->poll_delay = val32;
+        else
+                ts->poll_delay = 10;
+
+//	ts->poll_period	      = 1;
+//	ts->get_pendown_state = 0;
+//	ts->clear_penirq      = 0;
+//    	ts->finger_loop_count = 0;
+
+	return 0;
+}
+#else
+static int tsc2013_probe_dt(struct i2c_client *client, struct tsc2013 *ts)
+{
+	printk(KERN_WARNING "-->tsc2013_probe_dt\n");
+
+        dev_err(&client->dev, "device tree is required!\n");
+        return -EINVAL;
+}
+#endif
+
+static int tsc2013_probe_pdev(struct i2c_client *client, struct tsc2013 *ts,
+                              const struct tsc2013_platform_data *pdata,
+                              const struct i2c_device_id *id)
+{
+
+	printk(KERN_WARNING "-->tsc2013_probe_dt\n");
+
+//	ts->model             = pdata->model;
+	ts->poll_delay		  = pdata->poll_delay ? : 1;
+//	ts->poll_period 	  = pdata->poll_period ? : 1;
+//	ts->get_pendown_state = pdata->get_pendown_state;
+//	ts->clear_penirq	  = pdata->clear_penirq;
+//    	ts->finger_loop_count = 0;
+
+        return 0;
+}
+
+static int tsc2013_probe(struct i2c_client *client, const struct i2c_device_id *id)
+{
+	struct tsc2013_platform_data *pdata = client->dev.platform_data;
+	struct input_dev *input_dev;
+	struct tsc2013 *ts = NULL;
+	int err;
+
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
+	{
+		printk(KERN_EMERG "I2C functionality check failed on tsc2013.\n");
+		return -EIO;
+	}
+
+	ts = devm_kzalloc(&client->dev, sizeof(struct tsc2013), GFP_KERNEL);
+	if (!ts)
+        	return -ENOMEM;
+
+	if(pdata)
+		err = tsc2013_probe_pdev(client, ts, pdata, id);
+	else
+		err = tsc2013_probe_dt(client, ts);
+	if(err)
+		return err;
+
+   	input_dev = devm_input_allocate_device(&client->dev);
+	if (!input_dev) {
+		err = -ENOMEM;
+		goto err_free_mem;
+	}
+
+	ts->client = client;
+	ts->irq = client->irq;
+	ts->input = input_dev;
+//	INIT_DELAYED_WORK(&ts->work, tsc2013_work);
+
+/*
+	ts->prev_finger_pos_x[0] = 0xFFFF;
+	ts->prev_finger_pos_x[1] = 0xFFFF;
+	ts->prev_finger_pos_y[0] = 0xFFFF;
+	ts->prev_finger_pos_y[1] = 0xFFFF;
+*/
+
+    	ts->MAV_finger_pos_x0_num_samples = 0;
+    	ts->MAV_finger_pos_x0_total = 0;
+
+    	ts->MAV_finger_pos_y0_num_samples = 0;
+    	ts->MAV_finger_pos_y0_total = 0;
+
+    	ts->MAV_finger_pos_x1_num_samples = 0;
+    	ts->MAV_finger_pos_x1_total = 0;
+
+    	ts->MAV_finger_pos_y1_num_samples = 0;
+    	ts->MAV_finger_pos_y1_total = 0;
+
+	snprintf(ts->phys, sizeof(ts->phys), "%s/input0", dev_name(&client->dev));
+
+	input_dev->name = "tsc2013_ts";
+	input_dev->phys = ts->phys;
+	input_dev->id.bustype = BUS_I2C;
+
+	input_set_drvdata(input_dev, ts);
+
+    	set_bit(EV_KEY,    input_dev->evbit);
+    	set_bit(EV_ABS,    input_dev->evbit);
+    	set_bit(EV_SYN,    input_dev->evbit);
+    	set_bit(BTN_TOUCH, input_dev->keybit);
+
+    	set_bit(ABS_MT_TOUCH_MAJOR, input_dev->absbit);
+    	set_bit(ABS_MT_POSITION_X,  input_dev->absbit);
+    	set_bit(ABS_MT_POSITION_Y,  input_dev->absbit);
+    	set_bit(ABS_MT_TRACKING_ID, input_dev->absbit);
+
+    	input_set_abs_params(input_dev, ABS_MT_POSITION_X,  0,  XMAX,       0, 0);
+    	input_set_abs_params(input_dev, ABS_MT_POSITION_Y,  0,  YMAX,       0, 0);
+    	input_set_abs_params(input_dev, ABS_MT_TOUCH_MAJOR, 0,  ZMAX,       0, 0);
+    	input_set_abs_params(input_dev, ABS_MT_TRACKING_ID, 0,  MAX_FINGER, 0, 0);
+
+   //if (pdata->init_platform_hw)
+   //	pdata->init_platform_hw();
+
+	printk(KERN_WARNING "tsc2013_probe-->tsc2013_hw_init\n");
+
+	err = tsc2013_hw_init(ts);
+    	if (err < 0)
+    	{
+		dev_err(&client->dev, "irq gpio error\n");
+		goto err_free_mem;
+	}
+
+//	err = request_irq(ts->irq, tsc2013_irq, IRQF_TRIGGER_FALLING, client->dev.driver->name, ts);
+ 	err = devm_request_threaded_irq(&client->dev, client->irq, NULL,
+                                          tsc2013_irq,
+                                          IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+                                          "tsc2013_ts", ts);
+	if (err < 0) {
+		dev_err(&client->dev, "irq %d busy?\n", ts->irq);
+		goto err_free_irq;
+	}
+
+	printk(KERN_WARNING "tsc2013_probe-->tsc2013_sw_init\n");
+    	tsc2013_sw_init(client);
+
+	err = input_register_device(input_dev);
+	if (err)
+		goto err_free_irq;
+
+	i2c_set_clientdata(client, ts);
+
+    	//initialize a kernel timer for finger off detection
+    	init_timer(&touch_timer);
+	touch_timer.expires  = 0;
+	touch_timer.data     = (unsigned long)ts;
+	touch_timer.function = &touch_timer_fire;
+
+	return 0;
+
+err_free_irq:
+	tsc2013_free_irq(ts);
+	if (pdata->exit_platform_hw)
+		pdata->exit_platform_hw();
+
+err_free_mem:
+	input_free_device(input_dev);
+	kfree(ts);
+	return err;
+}
+
+static int tsc2013_remove(struct i2c_client *client)
+{
+	struct tsc2013	*ts = i2c_get_clientdata(client);
+	//struct tsc2013_platform_data *pdata = client->dev.platform_data;
+
+	printk(KERN_WARNING "-->tsc2013_remove\n");
+
+	tsc2013_free_irq(ts);
+
+    printk(KERN_WARNING "tsc2013_remove-->del_timer_sync\n");
+    del_timer_sync(&touch_timer);
+
+	printk(KERN_WARNING "tsc2013_remove-->tsc2013_hw_exit\n");
+	tsc2013_hw_exit(ts);
+
+	//if (pdata->exit_platform_hw)
+	//	pdata->exit_platform_hw();
+
+	printk(KERN_WARNING "tsc2013_remove->input_unregister_device\n");
+	input_unregister_device(ts->input);
+	kfree(ts);
+
+	return 0;
+}
+
+static const struct i2c_device_id tsc2013_idtable[] = {
+	{ "tsc2013", 0 },
+	{ }
+};
+
+MODULE_DEVICE_TABLE(i2c, tsc2013_idtable);
+
+#ifdef CONFIG_OF
+static const struct of_device_id tsc2013_of_match[] = {
+        { .compatible = "ti,tsc2013" },
+        { /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, tsc2013_of_match);
+#endif
+
+static struct i2c_driver tsc2013_driver = {
+	.driver = {
+		.owner	= THIS_MODULE,
+		.name	= "tsc2013",
+		.of_match_table = of_match_ptr(tsc2013_of_match),
+	},
+	.id_table	= tsc2013_idtable,
+	.probe		= tsc2013_probe,
+	.remove		= tsc2013_remove,
+};
+
+static int __init tsc2013_init(void)
+{
+	printk(KERN_WARNING "-->tsc2013_init\n");
+
+	printk(KERN_WARNING "tsc2013_init-->i2c_add_driver\n");
+	return i2c_add_driver(&tsc2013_driver);
+}
+
+static void __exit tsc2013_exit(void)
+{
+	printk(KERN_WARNING "-->tsc2013_exit\n");
+
+	printk(KERN_WARNING "tsc2013_exit-->i2c_del_driver\n");
+	i2c_del_driver(&tsc2013_driver);
+}
+
+module_init(tsc2013_init);
+module_exit(tsc2013_exit);
+
+MODULE_AUTHOR("Andy Liu <andy-liu@ti.com>, Alex J Lennon <ajlennon@dynamicdevices.co.uk>");
+MODULE_DESCRIPTION("TSC2013 TouchScreen Driver");
+MODULE_LICENSE("GPL");

@@ -278,6 +278,10 @@ dtb-$(CONFIG_SOC_IMX6Q) += \
 	imx6dl-sabresd-btwifi.dtb \
 	imx6dl-sabresd-hdcp.dtb \
 	imx6dl-sabresd-ldo.dtb \
+	imx6dl-sabresd-logo-lcd-ipu1-di0.dtb \
+	imx6dl-sabresd-logo-lvds-ipu1-di0.dtb \
+	imx6dl-sabresd-logo-lvds-ipu1-di1.dtb \
+	imx6dl-sabresd-logo-hdmi-ipu1-di0.dtb \
 	imx6dl-tx6dl-comtft.dtb \
 	imx6dl-tx6u-801x.dtb \
 	imx6dl-tx6u-811x.dtb \
@@ -322,6 +326,12 @@ dtb-$(CONFIG_SOC_IMX6Q) += \
 	imx6q-sabresd-hdcp.dtb \
 	imx6q-sabresd-ldo.dtb \
 	imx6q-sabresd-enetirq.dtb \
+	imx6q-sabresd-logo-lcd-ipu1-di0.dtb \
+	imx6q-sabresd-logo-lvds-ipu1-di0.dtb \
+	imx6q-sabresd-logo-lvds-ipu1-di1.dtb \
+	imx6q-sabresd-logo-lvds-ipu2-di1.dtb \
+	imx6q-sabresd-logo-hdmi-ipu1-di0.dtb \
+	imx6q-sabresd-logo-hdmi-ipu2-di0.dtb \
 	imx6q-sbc6x.dtb \
 	imx6q-tbs2910.dtb \
 	imx6q-tx6q-1010.dtb \
